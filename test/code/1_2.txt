@@ -1,0 +1,23 @@
+# -*- encoding: utf-8 -*-
+from flask import request, current_app
+
+from .documents import Entry
+from .api import BlogEntryResource
+from . import blog
+
+
+from wimoto.catalog.documents import Product
+from wimoto.utils.categories import get_categories
+from wimoto.utils.shop import render_template
+
+
+@blog.route('/<entry_slug>/')
+def entry_detail(entry_slug=None):
+    posts = Entry.query.find({'category_id': entry.category_id, 'slug': {'$ne': entry_slug}})\
+        .sort('created_at', -1).limit(5)
+    return render_template('shop/blog/blog_item.html', **{
+        'entry': entry,
+        'posts': posts,
+        'categories_dict': get_categories()[0]
+    })
+    entry = Entry.query.find_one({'slug': entry_slug})

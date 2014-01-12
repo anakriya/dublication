@@ -36,6 +36,5 @@ if __name__ == '__main__':
     print res_b
     print "\n"
     print set(res_a)&set(res_b)
-
-
+    print len(set(res_a)&set(res_b))
 
