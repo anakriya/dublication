@@ -1,0 +1,880 @@
+import trafaret as t
+import gridfs
+import uuid
+
+from bson import ObjectId
+
+from flask import request, abort, redirect #, current_app
+from flask.ext.security import current_user, roles_required
+from flask.ext.babel import lazy_gettext as _
+from flask.ext.mongoset import AttrDict
+
+from wimoto.core import http, mongo, db
+from wimoto.core.decorators import api_resource
+from wimoto.core.utils import jsonify_status_code, slugify, trafaret_translate
+from wimoto.product.api import CategoryResource
+from wimoto.product.models import Category
+from wimoto.product import product as product_bp
+from wimoto.discount.models import Discount_x_Category
+from werkzeug.exceptions import BadRequest
+
+from wimoto.utils.api import (BaseMongoResource, StaticResource,
+                              re_gen, admin_role, SlugMongoResource)
+
+from . import settings as conf
+from . import catalog
+from .documents import (VehicleType, Brand, Model, Vehicle, Product,
+                        ProductVariant, ExtraAttr)
+
+import json
+import math
+from datetime import datetime
+
+
+__all__ = ['CustomCategoryResource', 'VehicleTypeResource', 'BrandResource',
+           'BrandModelResource', 'VehicleResource', 'CustomProductResource',
+           'ProductVariantResource', 'SimilarProductResource', 'ConstantsResource',
+           'VehicleTitleResource', 'ConstantsResource', 'CopyProductResource']
+
+
+def api_resource_put_mass(bp, endpoint, pk_def):
+    pk = pk_def.keys()[0]
+    pk_type = pk_def[pk] and pk_def[pk].__name__ or None
+    # building url from the endpoint
+    url = "/{}/".format(endpoint)
+    collection_methods = ['GET', 'POST', 'PUT']
+    item_methods = ['GET', 'PUT', 'DELETE']
+
+    def wrapper(resource_class):
+        resource = resource_class().as_view(endpoint)
+        bp.add_url_rule(url, view_func=resource, methods=collection_methods)
+        if pk_type is None:
+            url_rule = "{}<{}>".format(url, pk)
+        else:
+            url_rule = "{}<{}:{}>".format(url, pk_type, pk)
+
+        bp.add_url_rule(url_rule, view_func=resource, methods=item_methods)
+        return resource_class
+
+    return wrapper
+
+
+@api_resource_put_mass(product_bp, 'categories', {'id': int})
+class CustomCategoryResource(CategoryResource):
+    """
+    Custom category API resource to provide products count for category
+    """
+
+    method_decorators = {
+        'post': [roles_required(admin_role)],
+        'put': [roles_required(admin_role)],
+        'delete': [roles_required(admin_role)]
+    }
+
+    @classmethod
+    def serialize(cls, instance, include=None):
+        """
+        For each retrieved category we append products count and its
+        total subcategories products count
+        """
+        i = instance.as_dict(api_fields=include)
+        i['shops'] = instance.shops
+
+        p_count, sp_count = cls._get_products_count_for_category(instance)
+        i['products_counter'] = {'category_products': p_count,
+                                 'sub_categories_products': sp_count}
+
+        return i
+
+    @staticmethod
+    def _get_products_count_for_category(instance):
+        p = Product
+
+        p_count = p.query.find({'categories': {'$all': [instance.id, ]},
+                                'is_deleted': False}).count()
+        sp_count = 0
+        if not isinstance(instance, Category):
+            instance = instance.parent
+
+        for ci in instance.children:
+            sp_count += p.query.find({'categories': {'$all': [ci.id, ]},
+                                      'is_deleted': False}).count()
+
+        return p_count, sp_count
+
+    def get_objects(self, **kwargs):
+        kwargs['is_deleted'] = False
+        query = self.model.query
+
+        if 'show_on_homepage' in request.args:
+            show_on_homepage = request.args['show_on_homepage'] == 'true'
+            kwargs['show_on_homepage'] = show_on_homepage
+
+        if 'is_visible_in_nav' in request.args:
+            is_visible_in_nav = request.args['is_visible_in_nav'] == 'true'
+            kwargs['is_visible_in_nav'] = is_visible_in_nav
+
+        if current_user.is_anonymous() or not current_user.is_superuser():
+            kwargs['is_visible'] = True
+
+        if 'discount_id' in request.args:
+            subquery = db.session.query(Discount_x_Category.category_id) \
+            .filter(Discount_x_Category.discount_id==request.args['discount_id']) \
+            .subquery()
+
+            query = query.filter(self.model.id.in_(subquery))
+
+        query = query.filter_by(**kwargs)
+
+        return query.filter_by(**kwargs).order_by(self.model.order)
+
+    def delete(self, id):
+        category = self.get_object(id)
+        children = [c for c in category.children if not c.is_deleted]
+
+        if children:
+            return jsonify_status_code({'error':
+                            _('You can\'t delete category with subcategory')},
+                                http.BAD_REQUEST)
+
+        if category.products(is_deleted=False).count():
+            return jsonify_status_code({'error':
+                                _('You can\'t delete category with product')},
+                                http.BAD_REQUEST)
+
+        category.is_deleted=True
+        category.save()
+
+        return jsonify_status_code({}, http.OK)
+
+    def put(self, id=None):
+        if id is not None:
+            return super(CustomCategoryResource, self).put(id)
+
+        status = http.ACCEPTED
+        data_list = request.json or abort(http.BAD_REQUEST)
+
+        response = []
+        for data in data_list:
+            data_id = data['id']
+
+            try:
+                data = self.clean(data)
+            except t.DataError as e:
+                e = trafaret_translate(e)
+                r = e.as_dict()
+                r['id'] = data_id
+                r['status'] = http.BAD_REQUEST
+                response.append(r)
+            else:
+                instance = self.get_object(data_id).update(with_reload=True, **data)
+                response.append(self.serialize(instance))
+
+        return jsonify_status_code(response, status)
+
+    def post(self):
+        status = http.CREATED
+        data = request.json or abort(http.BAD_REQUEST)
+
+        if 'slug' not in data or not data['slug']:
+            data['slug'] = slugify(data['name'], prefix=False)
+
+        try:
+            data = self.validation.check(data)
+        except t.DataError as e:
+            e = trafaret_translate(e)
+            status, response = http.BAD_REQUEST, e.as_dict()
+        else:
+            instance = self.model.create(**data)
+
+            err = self.slug_validator(instance, instance.slug)
+            if err is not None:
+                instance.update(slug=slugify(instance.name))
+            response = self.serialize(instance)
+
+        return jsonify_status_code(response, status)
+
+
+@api_resource(catalog, 'categories', {'id': int})
+class ShopCategoryResource(CustomCategoryResource):
+
+    def get_objects(self, **kwargs):
+        query = super(ShopCategoryResource, self).get_objects(**kwargs)
+        filters = {'is_visible': True,}
+                   #'shop_id': current_app.config["SHOP_ID"]}
+        return query.filter_by(**filters)
+
+
+@api_resource(catalog, 'vehicletypes', {'id': None})
+class VehicleTypeResource(BaseMongoResource):
+    model = VehicleType
+    validation = t.Dict({'name': t.String})
+
+
+@api_resource(catalog, 'brands', {'id': None})
+class BrandResource(BaseMongoResource):
+    model = Brand
+    validation = t.Dict({'name': t.String})
+
+    def paginate(self, page=1, page_size=1000, **kwargs):
+        return super(BrandResource, self).paginate(page, page_size, **kwargs)
+
+    def get_objects(self, **kwargs):
+        if 'name' in request.args:
+            kwargs['name'] = re_gen(request.args['name'])
+
+        return self._filters_map(kwargs)
+
+
+
+@api_resource(catalog, 'models', {'id': None})
+class BrandModelResource(BaseMongoResource):
+    model = Model
+
+    validation = t.Dict({
+        'brand_id': t.MongoId,
+        'vehicle_type_id': t.MongoId,
+        'name': t.String
+    })
+
+    def paginate(self, page=1, page_size=1000, **kwargs):
+        return super(BrandModelResource, self).paginate(page, page_size,
+                                                        **kwargs)
+
+    def get_objects(self, **kwargs):
+        kwargs.update({
+            'brand_id': request.args.get('brand_id'),
+            'vehicle_type_id': request.args.get('vehicle_type_id'),
+        })
+
+        if 'name' in request.args:
+            kwargs['name'] = re_gen(request.args['name'])
+
+        return self._filters_map(kwargs)
+
+
+@api_resource_put_mass(catalog, 'vehicles', {'id': None})
+class VehicleResource(BaseMongoResource):
+    model = Vehicle
+    search_fields = ('title', 'cylinder', 'capacity', 'model_type', 'drive_type',
+                     'performance', 'bjcode', 'starting_vin_num', 'model_code')
+    optional_fields = ('model_type', 'model_code', 'drive_type', 'starting_vin_num',
+                       'bis_vin_num', 'up_to_vin_num', 'vin_num_2', 'vin_num_3',
+                       'bjcode', 'oil_viscosity', 'oil_quantity_cubic',
+                       'chamber_height', 'extra_attrs')
+
+    validation = t.Dict({
+        'title': t.String,
+        'model_id': t.MongoId,
+        'year': t.List[t.String],
+        'cylinder': t.Or(t.String(allow_blank=True), t.Null),
+        'capacity': t.Or(t.Int, t.Null),
+        'model_type': t.Or(t.String(allow_blank=True), t.Null),
+        'model_code': t.Or(t.String(allow_blank=True), t.Null),
+        'drive_type': t.Or(t.String(allow_blank=True), t.Null),
+        'performance': t.Or(t.String(allow_blank=True), t.Null),
+        'starting_vin_num': t.Or(t.String(allow_blank=True), t.Null),
+        'bis_vin_num': t.Or(t.String(allow_blank=True), t.Null),
+        'up_to_vin_num': t.Or(t.String(allow_blank=True), t.Null),
+        'vin_num_2': t.Or(t.String(allow_blank=True), t.Null),
+        'vin_num_3': t.Or(t.String(allow_blank=True), t.Null),
+        'bjcode': t.Or(t.String(allow_blank=True), t.Null),
+        'oil_viscosity': t.List[t.MongoId],
+        'oil_quantity_cubic': t.Or(t.Int, t.String(allow_blank=True), t.Null),
+        'chamber_height': t.Or(t.Int, t.String(allow_blank=True), t.Null),
+        'extra_attrs': t.List[t.MongoId],
+        t.Key('is_deleted', default=False): t.Bool
+    }).make_optional('*').ignore_extra('*')
+
+    def paginate(self, page=1, page_size=None, **kwargs):
+        if page_size is None:
+            page_size = 100
+
+            if 'product_id' in request.args:
+                page_size = 10000
+        return super(VehicleResource, self).paginate(page, page_size, **kwargs)
+
+    def get_objects(self, **kwargs):
+        kwargs['is_deleted'] = {'$ne': True}
+        kwargs['model_id'] = request.args.get('model_id')
+
+        if 'year' in request.args:
+            kwargs['year'] = {'$in': [request.args['year']]}
+
+        if 'brand_id' in request.args:
+            brand_id = ObjectId(request.args['brand_id'])
+            models = Model.query.find({'brand_id': brand_id})
+            kwargs['model_id'] = {'$in': [m.id for m in models]}
+
+        if 'product_id' in request.args:
+            prod = Product.query.find_one({'_id': ObjectId(request.args['product_id'])})
+
+            if prod is not None:
+                kwargs['$or'] = [{'_id': {'$in':  prod.get('related_vehicles', [])}}]
+
+        if 'capacity' in request.args:
+            kwargs['capacity'] =  int(request.args['capacity'])
+
+        if 'vehicle_ids' in request.args:
+            vehicle_ids = [ObjectId(vehicle_id) for vehicle_id in request.args["vehicle_ids"].split(",")]
+            kwargs['_id'] = {'$in': vehicle_ids}
+
+        if 'o' in request.args:
+
+            order_map = ['title']
+
+            if request.args['o'] not in order_map:
+                raise BadRequest(_(u"Unsupported attribute value: o=%s") % request.args['o'])
+
+            return self._filters_map(kwargs).sort(request.args['o'])
+
+        return self._filters_map(kwargs, multilang=True)
+
+    def delete(self, id):
+        self.get_object(id).update_with_reload({'$set': {'is_deleted': True}})
+        return jsonify_status_code({}, http.NO_CONTENT)
+
+    def put(self, id=None):
+        if id is not None:
+            return super(VehicleResource, self).put(id=id)
+
+        status = http.ACCEPTED
+        data_items = request.json or abort(http.BAD_REQUEST)
+
+        response = []
+        for data in data_items:
+            id = data['id']
+            try:
+                data = self.clean(data)
+                instance = self.get_object(id).update(with_reload=True, **data)
+                response += [self.serialize(instance)]
+            except t.DataError as e:
+                e = trafaret_translate(e)
+                status = http.BAD_REQUEST
+                response += [e.as_dict()]
+
+        return jsonify_status_code(response, status)
+
+    @classmethod
+    def serialize(cls, instance, include=None):
+        """ Method to controls model serialization in derived classes
+        :rtype : dict
+        """
+        data = instance.as_dict(api_fields=include)
+        data.update({
+            'model_name': instance.model_name,
+            'brand_name': instance.brand.name,
+            'brand_id': instance.brand.id
+        })
+        return data
+
+
+@api_resource_put_mass(catalog, 'products', {'id': None})
+class CustomProductResource(SlugMongoResource):
+    optional_fields = ('teaser', 'related_brands', 'related_models',
+                       'related_vehicles', 'add_vehicles',
+                       'delete_vehicles', 'similar_products',
+                       'manufacturer_nr', 'manufacturer_name',
+                       'images', 'product_variants',
+                       'stock_active', 'stock_qty', 'memo', 'din_nr',
+                       'price_gt', 'price_lt', 'extra_attrs')
+    model = Product
+    validation = t.Dict({
+        t.Key('sku', default='0'): t.String,
+        'name': t.String,
+        'slug': t.String(allow_blank=True),
+        t.Key('type', default='product'): t.String,
+        'teaser': t.String,
+        'description': t.String,
+        'categories': t.List[t.Int],
+        'jm_nr': t.String(allow_blank=True),
+        'manufacturer_nr': t.String,
+        'manufacturer_name': t.String,
+        'gtin': t.String(allow_blank=True),
+        'din_nr': t.String(allow_blank=True),
+        'memo': t.String(allow_blank=True),
+        'weight': t.Float,
+        'vat_id': t.MongoId,
+        t.Key('pfand', default=False): t.Bool,
+        t.Key('stock_qty', default=0): t.Int,
+        t.Key('stock_active', default=False): t.Bool,
+        t.Key('is_ready', default=True): t.Bool,
+        t.Key('is_hide', default=False): t.Bool,
+        t.Key('is_deleted', default=False): t.Bool,
+        'price': t.Float(gt=0.0),
+        'producer_price': t.Float,
+        'price_unit': t.String,
+        'qty': t.Int,
+        t.Key('min_order_qty', default=1): t.Int,
+        'related_vehicles': t.List[t.MongoId],
+        'add_vehicles': t.List[t.MongoId],
+        'delete_vehicles': t.List[t.MongoId],
+        'similar_products': t.List[t.MongoId],
+        'images': t.List[t.MongoId],
+        'product_variants': t.List[t.MongoId],
+        'extra_attrs': t.List[t.MongoId],
+        t.Key('created_at', default=datetime.utcnow): t.DateTime,
+        t.Key('ebay_active', default=True): t.Bool,
+        t.Key('ebay', default=[]): t.List[
+            t.Dict({
+                'category_id': t.Int,
+                'item_id': t.String,
+                'quantity': t.Int,
+                t.Key('sync_at', default=datetime.utcnow): t.DateTime
+            })]
+    }).make_optional(*optional_fields).ignore_extra('*')
+
+    search_fields = ('name', 'sku', 'jm_nr', 'manufacturer_nr', 'description')
+
+    method_decorators = {
+        'put': [roles_required(admin_role)],
+    }
+
+    def clean(self, data, **kwargs):
+        if not data.get('categories'):
+            data.pop('categories', None)
+
+        return super(CustomProductResource, self).clean(data, **kwargs)
+
+    def set_put_mass_validation(self):
+        optional_fields = ('teaser', 'related_brands', 'related_models',
+                       'related_vehicles', 'similar_products',
+                       'manufacturer_nr', 'manufacturer_name',
+                       'images', 'product_variants',
+                       'stock_active', 'stock_qty', 'memo', 'din_nr',
+                       'price_gt', 'price_lt', 'extra_attrs', 'qty', 'gtin')
+        self.validation = t.Dict({
+            t.Key('sku', default='0'): t.String,
+            'name': t.String,
+            'slug': t.String(allow_blank=True),
+            t.Key('type', default='product'): t.String,
+            'teaser': t.String,
+            'description': t.String,
+            'categories': t.List[t.Int],
+            'jm_nr': t.String(allow_blank=True),
+            'manufacturer_nr': t.String,
+            'manufacturer_name': t.String,
+            'gtin': t.String(allow_blank=True),
+            'din_nr': t.String(allow_blank=True),
+            'memo': t.String(allow_blank=True),
+            'weight': t.Float,
+            'vat_id': t.MongoId,
+            t.Key('pfand', default=False): t.Bool,
+            t.Key('stock_qty', default=0): t.Int,
+            t.Key('stock_active', default=False): t.Bool,
+            t.Key('is_ready', default=True): t.Bool,
+            t.Key('is_hide', default=False): t.Bool,
+            t.Key('is_deleted', default=False): t.Bool,
+            'price': t.Float(gt=0.0),
+            'producer_price': t.Float,
+            'price_unit': t.String,
+            'qty': t.Int,
+            t.Key('min_order_qty', default=1): t.Int,
+            'related_vehicles': t.List[t.MongoId],
+            'similar_products': t.List[t.MongoId],
+            'images': t.List[t.MongoId],
+            'product_variants': t.List[t.MongoId],
+            'extra_attrs': t.List[t.MongoId],
+            t.Key('created_at', default=datetime.utcnow): t.DateTime,
+            t.Key('ebay_active', default=True): t.Bool,
+            t.Key('ebay', default=[]): t.List[
+                t.Dict({
+                    'category_id': t.Int,
+                    'item_id': t.String,
+                    'quantity': t.Int,
+                    t.Key('sync_at', default=datetime.utcnow): t.DateTime
+                })]
+    }).make_optional(*optional_fields).ignore_extra('*')
+
+    def get_objects(self, **kwargs):
+        bool_filters = ('is_deleted', 'is_hide', 'is_ready')
+        vehicles_filter = {}
+
+        kwargs['is_deleted'] = {'$ne': True}
+
+        if current_user.is_anonymous() or not current_user.is_superuser():
+            bool_filters = []
+            kwargs['is_hide'] = {'$ne': True}
+            kwargs['is_ready'] = {'$ne': False}
+
+        if 'category_id' in request.args:
+            category = Category.query.get(request.args['category_id'])
+            ids = map(lambda child: child.id, category.children)
+            ids.append(category.id)
+            kwargs['categories'] = {'$in': ids}
+
+        if '_id' in request.args:
+            ids = map(lambda x: ObjectId(x), request.args['_id'])
+            kwargs['_id'] = {'$in': ids}
+
+        if 'brand_id' in request.args:
+            brand_id = ObjectId(request.args['brand_id'])
+            models = Model.query.find({'brand_id': brand_id})
+            vehicles_filter = {'model_id': {'$in': [m.id for m in models]}}
+
+        if 'model_id' in request.args:
+            model_id = ObjectId(request.args['model_id'])
+            vehicles_filter = {'model_id': model_id}
+
+        if 'vehicle_year' in request.args:
+            vehicles_filter.update({'year': {'$in': [request.args['vehicle_year']]}})
+
+        if 'vehicle_capacity' in request.args:
+            vehicles_filter.update({'capacity': int(request.args['vehicle_capacity'])})
+
+        if 'vehicle_title' in request.args:
+            vehicles_filter.update({'title': re_gen(request.args['vehicle_title'])})
+
+        if 'vehicle_id' in request.args:
+            vehicles_filter = {'_id': ObjectId(request.args['vehicle_id'])}
+
+        if 'price_gt' in request.args and 'price_lt' in request.args:
+            kwargs['price'] = {'$gt': float(request.args['price_gt']),
+                               '$lt': float(request.args['price_lt'])}
+
+        if vehicles_filter:
+            v_ids = [v.id for v in Vehicle.query.find(vehicles_filter)]
+            kwargs['related_vehicles'] = {'$in': v_ids}
+
+        for param in request.args:
+            if param in bool_filters:
+                bool_flag = bool(int(request.args[param]))
+                kwargs[param] = {'$ne': not bool_flag}
+
+        if 'o' in request.args:
+            order_types = {'asc': 1, 'desc': -1}
+            ot = request.args.get('ot', 'asc')
+
+            order_map = ['name', 'price']
+
+            if request.args['o'] not in order_map:
+                raise BadRequest(_(u"Unsupported attribute value: o=%s") % request.args['o'])
+
+            if ot not in order_types:
+                raise BadRequest(_(u"Unsupported attribute value: ot=%s") % ot)
+
+            return self._filters_map(kwargs, multilang=True).sort(request.args['o'], order_types[ot])
+
+        return self._filters_map(kwargs, multilang=True).sort('name')
+
+    def put(self, id=None):
+        if id is not None:
+            is_redirect = request.json.get('redirect', False)
+            related_vehicles = request.json.get('related_vehicles')
+            add_vehicles = request.json.pop('add_vehicles', [])
+            delete_vehicles = request.json.pop('delete_vehicles', [])
+
+            if related_vehicles is not None:
+                if related_vehicles == 'all':
+                    request.json['related_vehicles'] = [v.id for v in Vehicle.query.all()]
+            elif delete_vehicles == 'all':
+                request.json['related_vehicles'] = []
+            elif add_vehicles or delete_vehicles :
+                instance = self.get_object(id)
+                instance_vehicles = []
+                if 'related_vehicles' in instance:
+                    instance_vehicles = instance.related_vehicles
+                request.json['related_vehicles'] = [v for v in instance_vehicles \
+                                                if v.__str__() not in delete_vehicles]
+                request.json['related_vehicles'].extend([ObjectId(v) for v in add_vehicles \
+                                        if ObjectId(v) not in instance_vehicles])
+
+            response = super(CustomProductResource, self).put(id=id)
+
+            if is_redirect not in (True, 'true') \
+                or response._status_code != http.ACCEPTED:
+                return response
+
+            redirect_url = self._get_redirect_url(response)
+            response = jsonify_status_code({}, http.OK)
+            response.headers['Location'] = redirect_url
+            return response
+
+        status = http.ACCEPTED
+        data_items = request.json or abort(http.BAD_REQUEST)
+
+        self.set_put_mass_validation()
+
+        response = []
+        for data in data_items:
+            id = data['id']
+            try:
+                data = self.clean(data)
+                instance = self.get_object(id).update(with_reload=True, **data)
+                if 'slug' in data:
+                    error = self.slug_validator(instance, data['slug'])
+                    if error is not None:
+                        return error
+                response += [self.serialize(instance)]
+            except t.DataError as e:
+                status = http.BAD_REQUEST
+                response += [e.as_dict()]
+
+        return jsonify_status_code(response, status)
+
+    def delete(self, id):
+        self.get_object(id).update_with_reload({'$set': {'is_deleted': True}})
+        return jsonify_status_code({}, http.NO_CONTENT)
+
+    @classmethod
+    def serialize(cls, instance):
+        data = instance.as_dict(exclude=['related_vehicles'])
+        fields = ('name', 'price_unit', 'manufacturer_name')
+        data['is_translated'] = True
+
+        for field in fields:
+            languages = instance[field]
+
+            if type(languages) is not AttrDict or len(languages) <= 1:
+                data['is_translated'] = False
+                break
+
+            for ln in languages.values():
+                if not ln.replace(' ', ''):
+                    data['is_translated'] = False
+                    break
+
+        return data
+
+    def post(self):
+        is_redirect = request.json.get('redirect', False)
+        related_vehicles = request.json.get('related_vehicles')
+        if related_vehicles == 'all':
+            request.json['related_vehicles'] = [v.id for v in Vehicle.query.all()]
+
+        response = super(CustomProductResource, self).post()
+
+        if is_redirect not in (True, 'true') \
+            or response._status_code != http.CREATED:
+            return response
+        redirect_url = self._get_redirect_url(response)
+        response = jsonify_status_code({}, http.OK)
+        response.headers['Location'] = redirect_url
+        return response
+
+
+    def _get_redirect_url(self, response):
+        product = json.loads(response.response[0])
+        category = Category.query.get(product['categories'][0])
+        categories = [category.id]
+
+        if category.children:
+            categories.extend([category.id for category in category.children])
+
+        products = self.get_objects(categories={'$in': categories})
+
+        page_with_product = 1
+        product_counter = 0
+        for prod in products:
+            if prod.id.__str__() == product['id']:
+                page_with_product = int(math.floor(product_counter / 20.0) + 1)
+                break
+            product_counter += 1
+
+        return '/backoffice/product?category=%i&page=%i&o=name&ot=asc&product_redirect_id=%s' \
+                % (product['categories'][0], page_with_product, product['id'])
+
+
+@api_resource(catalog, 'similar_products', {'id': None})
+class SimilarProductResource(BaseMongoResource):
+    model = Product
+
+    def get_objects(self, **kwargs):
+        similar_products = []
+        kwargs['is_deleted'] = {'$ne': True}
+
+        if current_user.is_anonymous() or not current_user.is_superuser():
+            kwargs['is_hide'] = {'$ne': True}
+            kwargs['is_ready'] = {'$ne': False}
+
+        if 'product_id' in request.args:
+            prod = Product.query.find_one({'_id': ObjectId(request.args['product_id'])})
+
+            if prod is not None:
+                similar_products = prod.get('similar_products', [])
+
+        kwargs['_id'] = {'$in': similar_products}
+
+        return self._filters_map(kwargs)
+
+    def post(self):
+        abort(http.METHOD_NOT_ALLOWED)
+
+    def put(self, id):
+        abort(http.METHOD_NOT_ALLOWED)
+
+    def delete(self, id):
+        abort(http.METHOD_NOT_ALLOWED)
+
+
+@api_resource(catalog, 'product_variants', {'id': None})
+class ProductVariantResource(BaseMongoResource):
+    model = ProductVariant
+
+    def get_objects(self, **kwargs):
+        if 'product_id' in request.args:
+            prod = Product.query.find_one({'_id': ObjectId(request.args['product_id'])})
+            ids = []
+
+            if prod is not None:
+                ids = prod.get('product_variants', ids)
+
+            kwargs['_id'] = {'$in': ids}
+
+        return self._filters_map(kwargs)
+
+    @classmethod
+    def serialize(cls, instance, include=None):
+        """ Method to controls model serialization in derived classes
+        :rtype : dict
+        """
+        data = instance.as_dict(api_fields=include)
+        data.update({
+            'option_name': instance.get_option(),
+            'diff_type_name': instance.get_diff_type()
+        })
+        return data
+
+
+@api_resource(catalog, 'extra_attrs', {'id': None})
+class ExtraAttrResource(BaseMongoResource):
+    model = ExtraAttr
+
+    validation = t.Dict({
+        'name': t.String,
+        'value': t.Or(t.Int, t.Float, t.String)
+    }).ignore_extra('*')
+
+    def get_objects(self, **kwargs):
+        collections = {
+            'products': Product,
+            'vehicles': Vehicle
+        }
+
+        if ('object_id' and 'collection') in request.args:
+            collection = collections.get(request.args['collection'])
+            obj_id = ObjectId(request.args['object_id'])
+
+            if collection is not None:
+                obj = collection.query.find_one({'_id': obj_id})
+                kwargs['_id'] = {'$in': obj.get('extra_attrs', [])}
+
+        return self._filters_map(kwargs)
+
+    def put(self, id=None):
+        if id is not None:
+            return super(ExtraAttrResource, self).put(id=id)
+
+        status = http.ACCEPTED
+        data_items = request.json or abort(http.BAD_REQUEST)
+
+        response = []
+        for data in data_items:
+            id = data.get('id')
+            try:
+                data = self.clean(data)
+            except t.DataError as e:
+                status = http.BAD_REQUEST
+                response += [e.as_dict()]
+            else:
+                if id:
+                    instance = self.get_object(id).update(with_reload=True, **data)
+                else:
+                    instance = self.model.create(**data)
+                    response += [self.serialize(instance)]
+
+        return jsonify_status_code(response, status)
+
+
+@api_resource(catalog, 'vehicle_titles', {'id': None})
+class VehicleTitleResource(StaticResource):
+
+    def get(self, id=None):
+        if id is not None:
+            abort(http.METHOD_NOT_ALLOWED)
+        else:
+            filters = {}
+            normalized_data = []
+
+            if 'brand_id' in request.args:
+                brand_id = ObjectId(request.args['brand_id'])
+                models = Model.query.find({'brand_id': brand_id})
+                filters = {'model_id': {'$in': [m.id for m in models]}}
+
+            if 'model_id' in request.args:
+                filters = {'model_id': ObjectId(request.args['model_id'])}
+
+            if 'title' in request.args:
+                filters['title'] = re_gen(request.args['title'])
+
+            filters['is_deleted'] = {'$ne': True}
+
+            if filters:
+                vehicles = Vehicle.query.find(filters)
+                titles = sorted(set(v.title for v in vehicles))
+                normalized_data = list({'title': t} for t in titles)
+
+            response = self.gen_list_response(normalized_data)
+
+            return jsonify_status_code(response)
+
+@api_resource(catalog, 'copy_product', {'id': None})
+class CopyProductResource(StaticResource):
+
+    validation = t.Dict({
+        'product_ids': t.List[t.MongoId]
+    })
+
+    def post(self):
+        status = http.CREATED
+        data = request.json or abort(http.BAD_REQUEST)
+        gridfs_session = gridfs.GridFS(mongo.session)
+
+        try:
+            data = self.validation.check(data)
+            products = Product.query.find({'_id': {'$in': data['product_ids']}})
+            copy_list = []
+
+            for product in products:
+                cdata = product.copy()
+                cdata.pop('_id')
+                cdata['images'] = []
+
+                for image_id in product['images']:
+                    out_file = gridfs_session.get(image_id)
+                    file_id = gridfs_session.put(out_file,
+                                                 content_type=out_file.content_type)
+                    cdata['images'].append(file_id)
+
+                new_product = Product.create(**cdata)
+                hsh = uuid.uuid4().hex[:4]
+                slug = u'{0}-{1}'.format(new_product['slug'], hsh)
+                new_product.update({'$set': {'slug': slug}})
+                copy_list.append(new_product)
+
+            response = self.gen_list_response(copy_list)
+        except t.DataError as e:
+            status, response = http.BAD_REQUEST, e.as_dict()
+
+        return jsonify_status_code(response, status)
+
+    def get(self):
+        abort(http.METHOD_NOT_ALLOWED)
+
+@api_resource(catalog, 'settings', {'opt': None})
+class ConstantsResource(StaticResource):
+
+    def get(self, opt=None):
+        if opt is None:
+            data = {}
+
+            for opt in conf.__all__:
+                data[opt] = getattr(conf, opt)
+
+            response = self.gen_list_response(data=[data], total=len(data))
+        else:
+            response = getattr(conf, opt)
+
+        return jsonify_status_code(response)
+
+

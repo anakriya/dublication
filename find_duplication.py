@@ -17,10 +17,10 @@ def winnow(window, hash_list):
 
 def calculate_final_hash(soucre_code):
     res = split_to_lexems(soucre_code)
-    print res
+    #print res
     #TODO(akrish): translate lexems to tokens
     res = hash_tokens(res, 3)
-    print sorted(res)
+    #print sorted(res)
     res = winnow(3, res)
     return res
 

@@ -1,0 +1,202 @@
+from bson import ObjectId
+from flask import request, abort
+from flask.ext.security import roles_required
+
+from wimoto.core.decorators import api_resource
+from wimoto.core.resources import ModelResource
+from wimoto.core import http
+from wimoto.catalog.documents import Product
+
+
+from wimoto.ebay.models import EbayCategory, Ebay_x_Shop_Category
+# from wimoto.ebay.ebay_api import delete_ebay_item
+from wimoto.utils.api import admin_role
+
+
+from . import ebay_bp
+
+
+@api_resource(ebay_bp, 'categories', {'id': int})
+class EbayCategoriesResource(ModelResource):
+    model = EbayCategory
+
+    method_decorators = {
+        'post': [roles_required(admin_role)],
+        'put': [roles_required(admin_role)],
+        'delete': [roles_required(admin_role)]
+    }
+
+    def post(self):
+        abort(http.METHOD_NOT_ALLOWED)
+
+    def put(self):
+        abort(http.METHOD_NOT_ALLOWED)
+
+    def delete(self, id):
+        abort(http.METHOD_NOT_ALLOWED)
+
+    def get_objects(self, **kwargs):
+        if 'ebay_category_id' in request.args:
+            kwargs['category_id'] = request.args['ebay_category_id']
+
+        if 'parent_category' in request.args:
+            kwargs['category_parent_id'] = request.args['parent_category']
+
+        query = self.model.query.filter_by(**kwargs)
+
+        if 'q' in request.args and request.args['q']:
+            q = request.args['q']
+            q = "%" + q + "%"
+            search_filters = self.model.category_name.like(q)
+
+            query = query.filter(search_filters)
+
+        first_level = True # include ebay_categories of first level
+        if 'first_level' in request.args:
+            if request.args['first_level'] == "false":
+                first_level = False
+
+        #We can add items to leaf categories only
+        leaf_category = False # If True - than include only leaf categories
+
+        if 'leaf_category' in request.args:
+            if request.args['leaf_category'] == "true":
+                leaf_category = True
+
+        deleted = True  # include deleted categories
+        if 'deleted' in request.args:
+            if request.args['deleted'] == "false":
+                deleted = False
+
+        if leaf_category:
+            query = query.filter(self.model.leaf_category == True)
+
+        if not first_level:
+            query = query.filter(self.model.category_level != 1)
+
+        if not deleted:
+            query = query.filter(self.model.deleted == False)
+
+        return query
+
+
+    @classmethod
+    def serialize(cls, instance, include=None):
+        result = instance.as_dict(api_fields=include)
+        parent_cat_id = instance.category_parent_id
+        pc_name = {'category_parent_name': cls.get_parents_category_name(parent_cat_id)}
+        result.update(pc_name)
+
+        return result
+
+
+    @classmethod
+    def get_parents_category_name(cls, category_id):
+        """
+        Method to get ebay category name via ebay category id
+        :param cls: EbayCategoriesResource
+        :param category_id: ebay_id of ebay category
+        :return: ebay_Category name
+        """
+        ebay_cat_name = EbayCategory.query \
+            .filter(EbayCategory.category_id == category_id) \
+            .first().category_name
+
+        return ebay_cat_name
+
+
+    @classmethod
+    def get_deleted_status(cls, category_id):
+        """
+        Method to get ebay category name via ebay category id
+        :param cls: EbayCategoriesResource
+        :param category_id: ebay_id of ebay category
+        :return: was category deleted or not(True, False)
+        """
+        deleted_status = EbayCategory.query \
+            .filter(EbayCategory.category_id == category_id) \
+            .first().deleted
+
+        return deleted_status
+
+
+@api_resource(ebay_bp, 'connect_categories', {'id': int})
+class EbayShopCategoriesResource(ModelResource):
+    model = Ebay_x_Shop_Category
+
+    def get_ebay_category_name(self, ebay_category_id):
+        """
+        Method to get ebay category name via ebay category id
+        :param ebay_category_id: id of ebay category
+        :return: name of the category
+        """
+        ebay_category_resource = EbayCategoriesResource()
+        ebay_category = ebay_category_resource.get_object(ebay_category_id)
+        ebay_category_name = ebay_category.as_dict()['category_name']
+
+        return ebay_category_name
+
+    def get_category_deleted_status(self, ebay_category_id):
+        ebay_category_resource = EbayCategoriesResource()
+        ebay_category = ebay_category_resource.get_object(ebay_category_id)
+        ebay_category_name = bool(ebay_category.as_dict()['deleted'])
+
+        return ebay_category_name
+
+    def get_remote_ebay_category_id(self, local_ebay_category_id):
+        ebay_category_resource = EbayCategoriesResource()
+        ebay_category = ebay_category_resource.get_object(local_ebay_category_id)
+        remote_ebay_category_id = ebay_category.as_dict()['category_id']
+        return remote_ebay_category_id
+
+    @classmethod
+    def serialize(cls, instance, include=None):
+        result = instance.as_dict(api_fields=include)
+        cls_obj = EbayShopCategoriesResource()
+        category_dict = {"ebay_category_name": cls_obj.get_ebay_category_name(result['ebay_category_id']),
+                         "deleted": cls_obj.get_category_deleted_status(result['ebay_category_id'])}
+        result.update(category_dict)
+
+        return result
+
+    def get_objects(self, **kwargs):
+        if 'ebay_category_id' in request.args:
+            kwargs['ebay_category_id'] = request.args['ebay_category_id']
+        if 'shop_category_id' in request.args:
+            kwargs['shop_category_id'] = request.args['shop_category_id']
+
+        query = self.model.query.filter_by(**kwargs)
+
+        return query
+
+    def delete_sync(self, category_id):
+        from wimoto.ebay.ebay_api import delete_ebay_item
+        # delete connections in products, delete products on ebay
+        products = Product.query.find({'ebay.category_id': category_id})
+
+        for product in products:
+            for sync_dict in product.ebay:
+                if sync_dict['category_id'] == category_id:
+                    # delete on ebay
+                    delete_ebay_item(sync_dict['item_id'])
+                    # delete local sync
+                    Product.query.update({'_id': ObjectId(product.id)},
+                                         {'$pull': {'ebay': {'category_id': category_id}}})
+                    break
+
+    def put(self, id):
+        # if params in connection we changed- we need to delte all information about connections
+        ebay_mapping_model_obj = Ebay_x_Shop_Category()
+
+        mapping = ebay_mapping_model_obj.get(id)
+        if request.json['ebay_category_id'] != mapping.ebay_category_id:
+            remote_ebay_category_id = self.get_remote_ebay_category_id(request.json['ebay_category_id'])
+            self.delete_sync(remote_ebay_category_id)
+
+        return super(EbayShopCategoriesResource, self).put(id)
+
+    def delete(self, id):
+        ebay_mapping_model_obj = Ebay_x_Shop_Category()
+        mapping = ebay_mapping_model_obj.get(id)
+        self.delete_sync(mapping.ebay_category_id)
+        return super(EbayShopCategoriesResource, self).delete(id)

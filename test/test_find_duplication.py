@@ -35,3 +35,30 @@ def test_1():
     print set(res_a)&set(res_b)
     #print len(a)/set(res_a)&set(res_b)
     assert 1==1
+
+
+def test_2():
+    """
+    test 2 - similar code
+    """
+    pass
+
+
+def test_3():
+    """
+    test 3 - change position of 2 functions
+    """
+    pass
+
+
+def test_4():
+    """
+    test 4 - change name of one variable(7 times)
+    """
+    pass
+
+def test_5():
+    """
+    test 5 - two different part of code
+    """
+    pass

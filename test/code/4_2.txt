@@ -1,0 +1,297 @@
+from flask import url_for, current_app
+
+from wimoto.core import mongo
+from wimoto.core.utils import round_decimal
+from wimoto.core.documents import Document
+from wimoto.product.models import Cart, Category
+
+from wimoto.vat.documents import VatItem
+from wimoto.utils.price import price_format
+from .settings import PRODUCT_VARIANT_OPTIONS, PRICE_DIFF_TYPES
+
+from datetime import datetime
+from decimal import Decimal
+
+import trafaret as t
+
+
+__all__ = ['VehicleType', 'Brand', 'Model', 'Vehicle', 'Product',
+           'ProductVariant', 'ExtraAttr']
+
+
+@mongo.register
+class VehicleType(Document):
+    """ Keeps Vehicle Types """
+    __collection__ = 'vehicletypes'
+
+    variable = t.Dict({
+        'name': t.String,
+    })
+
+    required_fields = ['name']
+    i18n = ['name']
+    indexes = ['id']
+
+
+@mongo.register
+class Brand(Document):
+    """ Keeps Brands """
+    __collection__ = 'brands'
+
+    variable = t.Dict({
+        'name': t.String,
+    })
+
+    required_fields = ['name']
+    indexes = ['id']
+    i18n = ['name']
+
+@mongo.register
+class Model(Document):
+    """ Keeps Models for each Brand """
+    __collection__ = 'models'
+
+    variable = t.Dict({
+        'brand_id': t.MongoId,
+        'vehicle_type_id': t.MongoId,
+        'name': t.String
+    })
+
+    required_fields = ['brand', 'vehicle_type', 'name']
+    indexes = ['id', 'brand', 'vehicle_type']
+    i18n = ['name']
+
+
+@mongo.register
+class Vehicle(Document):
+    """ Keeps Vehicle types for each brand model """
+    __collection__ = 'vehicles'
+
+    optional_fields = ('extra_attrs', )
+
+    variable = t.Dict({
+        'model_id': t.MongoId,
+        'title': t.String,
+        'year': t.List[t.String],
+        'cylinder': t.Or(t.String(allow_blank=True), t.Null),
+        'capacity': t.Or(t.Int, t.Null),
+        'model_type': t.Or(t.String(allow_blank=True), t.Null),
+        'model_code': t.Or(t.String(allow_blank=True), t.Null),
+        'drive_type': t.Or(t.String(allow_blank=True), t.Null),
+        'performance': t.Or(t.String(allow_blank=True), t.Null),
+        'starting_vin_num': t.Or(t.String(allow_blank=True), t.Null),
+        'bis_vin_num': t.Or(t.String(allow_blank=True), t.Null),
+        'up_to_vin_num': t.Or(t.String(allow_blank=True), t.Null),
+        'vin_num_2': t.Or(t.String(allow_blank=True), t.Null),
+        'vin_num_3': t.Or(t.String(allow_blank=True), t.Null),
+        'bjcode': t.Or(t.String(allow_blank=True), t.Null),
+        'oil_viscosity': t.List[t.MongoId],
+        'oil_quantity_cubic': t.Or(t.Int, t.String(allow_blank=True), t.Null),
+        'chamber_height': t.Or(t.Int, t.String(allow_blank=True), t.Null),
+        'extra_attrs': t.List[t.MongoId],
+        t.Key('is_deleted', default=False): t.Bool
+    }).make_optional('*')
+
+    required_fields = ['model']
+    indexes = ['id', 'model']
+    i18n = ['model_type', 'title', 'drive_type', 'model_name', 'brand_name']
+
+    def _get_model(self):
+        return Model.query.find_one({'_id': self.model_id})
+
+    @property
+    def model_name(self):
+        return self._get_model().name
+
+    @property
+    def brand(self):
+        model = self._get_model()
+        return Brand.query.find_one({'_id': model.brand_id})
+
+
+@mongo.register
+class ProductVariant(Document):
+    variable = t.Dict({
+        'option': t.String(regex=r'{}'.format(PRODUCT_VARIANT_OPTIONS.keys())),
+        'name': t.String,
+        'price_diff': t.Float,
+        'diff_type': t.String(regex=r'{}'.format(PRICE_DIFF_TYPES.keys())),
+        'quantity': t.Int
+    })
+
+    required_fields = ['option', 'name', 'quantity', 'price_diff',
+                       'diff_type']
+    i18n = ['name']
+
+    def get_option(self):
+        return PRODUCT_VARIANT_OPTIONS[self.option]
+
+    def get_diff_type(self):
+        return PRICE_DIFF_TYPES[self.diff_type]
+
+    def apply_diff(self, price):
+        if self.diff_type == '0':
+            return price + Decimal(self.price_diff)
+        else:
+            return price + ((price * Decimal(self.price_diff)) / 100)
+
+
+@mongo.register
+class Product(Document):
+    __collection__ = 'products'
+
+    variable = t.Dict({
+        t.Key('sku', default='0'): t.String,
+        'name': t.String,
+        'slug': t.String,
+        t.Key('type', default='product'): t.String,
+        'teaser': t.String,
+        'description': t.String,
+        'categories': t.List[t.Int],
+        'jm_nr': t.String(allow_blank=True),
+        'manufacturer_nr': t.String,
+        'manufacturer_name': t.String,
+        'price': t.Float,
+        'vat_id': t.MongoId,
+        'producer_price': t.Float,
+        'price_unit': t.String,
+        t.Key('pfand', default=False): t.Bool,
+        'qty': t.Int,
+        'gtin': t.String(allow_blank=True),
+        'din_nr': t.String(allow_blank=True),
+        'memo': t.String(allow_blank=True),
+        'weight': t.Float,
+        t.Key('stock_qty', default=0): t.Int,
+        t.Key('stock_active', default=False): t.Bool,
+        t.Key('min_order_qty', default=1): t.Int,
+        'related_vehicles': t.List[t.MongoId],
+        'similar_products': t.List[t.MongoId],
+        'images': t.List[t.MongoId],
+        'extra_attrs': t.List[t.MongoId],
+        t.Key('is_ready', default=True): t.Bool,
+        t.Key('is_hide', default=False): t.Bool,
+        t.Key('is_deleted', default=False): t.Bool,
+        'updated_at': t.DateTime,
+        t.Key('created_at', default=datetime.utcnow): t.DateTime,
+        'product_variants': t.List[t.MongoId],
+        t.Key('ebay_active', default=True): t.Bool,
+        t.Key('ebay', default=[]): t.List[
+            t.Dict({
+                'category_id': t.Int,
+                'item_id': t.String,
+                'quantity': t.Int,
+                t.Key('sync_at', default=datetime.utcnow): t.DateTime
+            })
+        ]
+    }).make_optional('product_variants', 'extra_attrs', 'stock_active',
+                     'stock_qty', 'memo', 'din_nr')
+
+    required_fields = ['name', 'slug', 'type', 'categories']
+    i18n = ['name', 'teaser', 'description', 'price_unit', 'manufacturer_name']
+    indexes = ['id', 'categories', ('updated_at', -1), ('created_at', -1), 'type']
+
+    def add_to_cart(self, customer, amount, product_variant=None, service=''):
+        return Cart.create(amount, customer, self, product_variant, service)
+
+    def get_vat(self):
+        return VatItem.query.find_one({'_id': self.vat_id})
+
+    def get_price(self, product_variant=None, amount=1):
+        total_price = Decimal(self.price)
+
+        if product_variant is not None:
+            total_price = product_variant.apply_diff(total_price)
+
+        #total_price += self.get_vat().calculate(total_price)
+
+        #if self.pfand:
+            #total_price += Decimal(current_app.config['PFAND']['price'])
+
+        return round_decimal(Decimal(total_price * Decimal(amount)))
+
+    def delete(self):
+        if 'product_variants' in self:
+            for item in self.product_variants:
+                item.delete()
+
+        super(Product, self).delete()
+
+    @classmethod
+    def get_active(cls, **kwargs):
+        filters = {
+            'is_deleted': False,
+            'is_ready': True,
+            'is_hide': False
+        }
+        filters.update(kwargs)
+        return cls.query.find(filters)
+
+    @property
+    def title_image_url(self):
+        if self.images:
+            return url_for('gridfs.file', id=self.images[0]).replace('?id=', '')
+
+    @property
+    def first_category(self):
+        if self.categories:
+            return Category.query.get(self.categories[0])
+
+    def get_variants(self):
+        if 'product_variants' in self:
+            variants = ProductVariant.query.find({
+                '_id': {
+                    '$in': self.product_variants
+                }
+            })
+            return variants
+        else:
+            return None
+
+    def get_variants_as_dict(self):
+        result = dict((k, {'name': v, 'variants': []}) \
+            for k, v in PRODUCT_VARIANT_OPTIONS.iteritems())
+        variants = self.get_variants()
+        if variants is not None:
+            for variant in variants:
+                variant_dict = variant.as_dict()
+                variant_dict.update({'price': self.get_price(product_variant=variant)})
+                result[variant.option]['variants'].append(variant_dict)
+        return result
+
+    def get_extra_attrs(self):
+        if 'extra_attrs' in self:
+            return ExtraAttr.query.find({'_id': {'$in': self.extra_attrs}})
+        else:
+            return None
+
+
+    def get_formated_price(self, price_type=None):
+        vat = self.get_vat().calculate(self.price)
+
+        prices = {
+            'gross': price_format(self.get_price()),
+            'net': price_format(Decimal(self.price) - vat),
+            'vat': price_format(vat),
+            'pfand': price_format(Decimal(current_app.config['PFAND']['price'])),
+        }
+
+        if price_type is None:
+            price_type = 'gross'
+
+        if price_type in prices.keys():
+            return prices[price_type]
+        else:
+            return None
+
+
+@mongo.register
+class ExtraAttr(Document):
+    """ Keeps ExtrAttr for each Product """
+    __collection__ = 'extra_attrs'
+
+    variable = t.Dict({
+        'name': t.String,
+        'value': t.Or(t.Int, t.Float, t.String)
+    })
+
+    i18n = ['name', 'value']
