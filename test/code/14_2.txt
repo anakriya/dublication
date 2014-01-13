@@ -1,0 +1,5 @@
+class Simple:
+    """A simple example class"""
+    i = 54321
+    def my(self):
+        return 'hello world'

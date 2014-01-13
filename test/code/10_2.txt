@@ -1,0 +1,87 @@
+# -*- encoding: utf-8 -*-
+
+
+from flask import abort, request, current_app
+from flask.ext.babel import lazy_gettext as _
+
+from wimoto.core import core
+from wimoto.product.models import Category
+
+from wimoto.blog.documents import Entry
+from wimoto.utils.categories import get_categories
+from wimoto.utils.shop import render_template
+
+from .documents import Product
+from .api import CustomProductResource
+from wimoto.esearch.es_api import get_products
+from bson import ObjectId
+from decimal import Decimal
+
+
+@core.route('/')
+def index():
+    entries = Entry.query.find().sort('created_at', -1).limit(3)
+    categories = get_categories()
+
+    return render_template('shop/index.html', **{
+        'categories_dict': categories[0],
+        'categories': categories[1].filter_by(show_on_homepage=True),
+        'blog_entries': entries
+    })
+
+
+@core.route('/backoffice/')
+@core.route('/backoffice/<path:smth>')
+def backoffice(smth=None):
+    return render_template('backoffice/index.html', **{})
+
+
+@core.route('/orders/')
+@core.route('/search/')
+@core.route('/email_confirm/success/')
+def shop_container():
+    return render_template('shop/base.html',
+        **{'categories_dict': get_categories()[0]})
+
+
+@core.route('/layout/<path:template>')
+@core.route('/layout/')
+def layout(template=None):
+    template or abort(404)
+    return render_template('layout/{}'.format(template), **{})
+
+@core.route('/products/')
+@core.route('/category/<slug>/')
+def product_list(slug=None):
+    resource = CustomProductResource()
+
+    cur_page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('page_size', current_app.config['PRODUCTS_PER_PAGE']))
+
+    query = request.args.to_dict()
+    query['from'] = (cur_page - 1) * page_size
+    query['size'] = page_size
+
+    if slug is not None:
+        category = Category.get_by_slug(slug)
+        ids = map(lambda child: child.id, category.children)
+        ids.append(category.id)
+        query['categories'] = ids
+    else:
+        category = None
+
+    result = get_products(query)
+
+    page = [
+        result['objects'],
+        result['meta']['total'],
+        result['meta']['pages'],
+        result['meta']['quantity']
+    ]
+
+    return render_template('shop/catalog/product_list.html', **{
+        'page': page,
+        'cur_page': cur_page,
+        'category': category,
+        'categories_dict': get_categories()[0]
+    })

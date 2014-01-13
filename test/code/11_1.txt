@@ -1,0 +1,142 @@
+nimport sys
+import re
+import math
+
+PRECEDENCES = {'sqrt' : 0, 'cos' : 0, 'sin' : 0, 'tan' : 0, 'lg': 0,
+            'abs': 0, 'ln' : 0, '(' : 1, ')' : 1, '|' : 2, '!' : 3,
+            '~' : 4, '^' : 5, 'mod' : 6, '*' : 7, '/' : 7, '+' : 8,
+            '-' : 8}
+UNARY = ['sqrt', 'cos', 'sin', 'tan', 'lg', 'ln', '!', '~', 'abs']
+class Stack(list):
+    """
+    List to Stack with push and top
+    """
+    def top(self):
+        """ top """
+        return self[- 1]
+
+    def push(self, val):
+        """ push """
+        self.append(val)
+
+def get_tokens(expression):
+    """ a parser. ptoken (previous token) helps to decide if - is
+    unary or binary """
+    opening_bars = expression.count('|') / 2
+    tokens = [part for part in re.split(r'([^\\w\\d.])', expression)\\
+              if len(part.strip()) > 0]
+    ptoken = True
+    for token in tokens:
+        if token == '-' and ptoken:
+            token = '~'
+        if token == '|':
+            if opening_bars == 0:
+                ptoken = False
+                yield (')', ')')
+            else:
+                opening_bars -= 1
+                ptoken = True
+                yield ('O', 'abs')
+                yield ('(', '(')
+        elif token == '(':
+            ptoken = True
+            yield ('(', token)
+        elif token == ')':
+            ptoken = False
+            yield (')', token)
+        elif token in PRECEDENCES.keys():
+            ptoken = True
+            yield ('O', token)
+        elif token == 'Pi':
+            ptoken = False
+            yield ('N', math.pi)
+        elif token == 'e':
+            ptoken = False
+            yield ('N', math.e)
+        else:
+            ptoken = False
+            yield ('N', float(token))
+
+
+def to_postfix(expression):
+    """ convert to postfix """
+    express = []
+    stack = Stack()
+    get_token = get_tokens(expression)
+    for tkn in get_token:
+        if tkn[0] == '(':
+            stack.push(tkn)
+        if tkn[0] == 'N':
+            express.append(tkn)
+        if tkn[0] == 'O':
+            while len(stack) > 0:
+                if stack.top()[0] == '(':
+                    break
+                if PRECEDENCES[stack.top()[1]] <= PRECEDENCES[tkn[1]]:
+                    express.append(stack.pop())
+                else:
+                    break
+            stack.push(tkn)
+        if tkn[0] == ')':
+            while stack.top()[1] != '(':
+                express.append(stack.pop())
+            stack.pop()
+    while len(stack) > 0:
+        express.append(stack.pop())
+    return express
+
+def operate(operation, num1, num2):
+    """ binary Calculations """
+    if operation == '+':
+        return num1 + num2
+    if operation == '-':
+        return num1 - num2
+    if operation == '*':
+        return num1 * num2
+    if operation == '/':
+        return num1 / num2
+    if operation == '^':
+        return num1 ** num2
+    if operation == 'mod':
+        return num1 % num2
+
+def unary_op(operation, num):
+    """ unay operations """
+    if operation in ['sin', 'cos', 'tan']:
+        num = math.radians(num)
+    opers = {'sqrt': math.sqrt, 'cos': math.cos, 'sin': math.sin,
+        'tan': math.tan, 'lg': math.log10 , 'ln': math.log,
+        '!': math.factorial, '~': lambda x: x * -1, 'abs': abs}
+    result = opers[operation](num)
+    return result
+
+def calc(expression):
+    """" Calculator """
+    stack = Stack()
+    for tkn in expression:
+        if tkn[0] == 'N':
+            stack.push(tkn[1])
+        else:
+            if tkn[1] in UNARY:
+                tnum = stack.pop()
+                stack.push(unary_op(tkn[1], tnum))
+            else:
+                tnum2 = stack.pop()
+                tnum1 = stack.pop()
+                stack.push(operate(tkn[1], tnum1, tnum2))
+    result = stack.pop()
+    if round(result, 5) == round(result):
+        return int(round(result))
+    return round(result, 5)
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        FILENAME = sys.argv[1]
+    else:
+        FILENAME = sys.argv[0][:-3] + 'txt'
+    with open(FILENAME, 'r') as ftx:
+        for test_line in ftx:
+            test_line = test_line.strip()
+            if len(test_line) > 0:
+                exp = to_postfix(test_line)
+                print calc(exp)

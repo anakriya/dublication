@@ -1,0 +1,36 @@
+content
+from sys import argv, stdout
+
+class Node:
+    def __init__(self, data, prev):
+        self.prev = prev
+        self.data = data
+
+
+class MyClass:
+    def __init__(self, data):
+        self.top = Node(data, None)
+
+
+
+    def pop(self):
+        value = self.top.data;
+        self.top = self.top.prev;
+        return value
+
+
+    def push(self, data):
+        self.top = Node(data, self.top)
+
+if __name__ == "__main__":
+    with open(argv[1]) as test:
+        for line in test:
+            array = line.strip().split(" ");
+            dishes = MyClass(array[0])
+            [dishes.push(int(a)) for a in array[1:]]
+            stdout.write(str(dishes.pop()))
+            while dishes.top is not None:
+                dishes.pop()
+                if dishes.top is not None:
+                    stdout.write(" " + str(dishes.pop()))
+            print ""

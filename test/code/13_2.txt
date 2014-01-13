@@ -1,0 +1,6 @@
+b = 7
+a = 5
+d = a + b
+print b
+print a
+print d
