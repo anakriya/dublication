@@ -1,0 +1,241 @@
+#import os
+#import tempfile
+
+from flask import current_app, request
+from wimoto.esearch.creat_db_json import get_product_via_id, get_db_iterator
+from wimoto.core.utils import get_locale
+from pyelasticsearch.exceptions import InvalidJsonResponseError, ElasticHttpNotFoundError
+
+from . import es, INDEX_NAME, TYPE_NAME
+
+LOCALE = get_locale()
+NAME = "name.%s" % LOCALE
+DESCRIPTION = "description.%s" % LOCALE
+TEASER = "teaser.%s" % LOCALE
+VEHICLE_TITLE = "related_vehicles.title.%s" % LOCALE
+
+
+def create_index():
+    try:
+        es.delete_index(INDEX_NAME)
+    except Exception, e:
+        pass
+    finally:
+        es.create_index(INDEX_NAME)
+
+
+def create_mapping():
+    pass
+
+
+def synchronize_with_mongo():
+    create_index()
+    print "Index created"
+    create_mapping()
+    print "Mapping created"
+    for product_data in get_db_iterator(is_deleted=False):
+        es.send_request(method='POST', path_components=['_bulk'], body=product_data, encode_body=False)
+    print "All products updated"
+
+
+def synchronize_product(product_id):
+    product_json = get_product_via_id(product_id)
+    try:
+        es.update(index=INDEX_NAME, doc_type=TYPE_NAME, doc=product_json, id=product_id)
+    except ElasticHttpNotFoundError:
+        add_product(product_id)
+
+
+def delete_product(product_id):
+    es.delete(index=INDEX_NAME, doc_type=TYPE_NAME, id=product_id)
+
+
+def add_product(product_id):
+    product_json = get_product_via_id(product_id)
+    es.index(index=INDEX_NAME, doc_type=TYPE_NAME, doc=product_json, id=product_id)
+
+
+def get_products(params):
+    query = make_query(params)
+    result_json = es.send_request(method='GET', body=query, path_components=[INDEX_NAME, TYPE_NAME, '_search'])
+    result = processing_query_result(result_json, params)
+    return result
+
+
+def processing_query_result(result_json, params):
+    total = result_json['hits']['total']
+    quantity = int(params["size"])
+    pages = (total + quantity - 1) / quantity
+    result = {
+        "meta": {
+        "total": total,
+        "pages": pages,
+        "quantity": quantity
+        },
+        "objects": []
+    }
+
+    for item in result_json['hits']['hits']:
+        result["objects"].append(make_product_dict(item["fields"]))
+
+    return result
+
+
+def make_product_dict(es_product):
+    LOCALE = get_locale()
+    FALLBACK_LOCALE = current_app.config['BABEL_DEFAULT_LOCALE']
+
+    NAME = "name.%s" % LOCALE
+    FALLBACK_NAME = "name.%s" % FALLBACK_LOCALE
+    DESCRIPTION = "description.%s" % LOCALE
+    FALLBACK_DESCRIPTION = "description.%s" % FALLBACK_LOCALE
+    TEASER = "teaser.%s" % LOCALE
+    FALLBACK_TEASER = "teaser.%s" % FALLBACK_LOCALE
+
+    try:
+        is_backoffice = ('_lang' in request.args or
+                        (request.json and '_lang' in request.json))
+    except RuntimeError:
+        is_backoffice = False
+
+    result={}
+
+    if es_product.has_key("price"):
+        result["price"] = es_product["price"]
+    if es_product.has_key("_id"):
+        result["_id"] = es_product["_id"]
+    if es_product.has_key("slug"):
+        result["slug"] = es_product["slug"]
+    if es_product.has_key("images"):
+        result["images"] = es_product["images"]
+    if es_product.has_key("related_vehicles._id"):
+        result["related_vehicles._id"] = es_product["related_vehicles._id"]
+    if es_product.has_key("related_vehicles.title.de"):
+        result["related_vehicles.title.de"] = es_product["related_vehicles.title.de"]
+
+    if es_product.has_key(DESCRIPTION):
+        result["description"] = es_product[DESCRIPTION]
+    elif is_backoffice:
+        result["description"] = ''
+    elif es_product.has_key(FALLBACK_DESCRIPTION):
+        result["description"] = es_product[FALLBACK_DESCRIPTION]
+
+    if es_product.has_key(NAME):
+        result["name"] = es_product[NAME]
+    elif is_backoffice:
+        result["name"] = ''
+    elif es_product.has_key(FALLBACK_NAME):
+        result["name"] = es_product[FALLBACK_NAME]
+
+    if es_product.has_key(TEASER):
+        result["teaser"] = es_product[TEASER]
+    elif is_backoffice:
+        result["teaser"] = ''
+    elif es_product.has_key(FALLBACK_TEASER):
+        result["teaser"] = es_product[FALLBACK_TEASER]
+
+    return result
+
+
+def make_query(params):
+    LOCALE = get_locale()
+    FALLBACK_LOCALE = current_app.config['BABEL_DEFAULT_LOCALE']
+
+    NAME = "name.%s" % LOCALE
+    DESCRIPTION = "description.%s" % LOCALE
+    TEASER = "teaser.%s" % LOCALE
+    VEHICLE_TITLE="related_vehicles.title.%s" % LOCALE
+
+    result = {}
+
+    result["from"] = params["from"]
+    result["size"] = params["size"]
+
+    result["fields"] = ["_id",
+                        NAME,
+                        "price",
+                        "slug",
+                        "images",
+                        DESCRIPTION,
+                        TEASER,
+                        VEHICLE_TITLE,
+                        "related_vehicles._id"]
+
+    if LOCALE != FALLBACK_LOCALE:
+        FALLBACK_NAME = "name.%s" % FALLBACK_LOCALE
+        FALLBACK_DESCRIPTION = "description.%s" % FALLBACK_LOCALE
+        FALLBACK_TEASER = "teaser.%s" % FALLBACK_LOCALE
+        FALLBACK_VEHICLE_TITLE="related_vehicles.title.%s" % FALLBACK_LOCALE
+
+        result['fields'].extend([
+            FALLBACK_NAME,
+            FALLBACK_DESCRIPTION,
+            FALLBACK_TEASER,
+            FALLBACK_VEHICLE_TITLE
+        ])
+
+    result["filter"] = {}
+    result["filter"]["and"] = []
+
+    if (params.has_key("price_from") and
+            params.has_key("price_from")):
+        result["filter"]["and"].append({"range": {"price": {
+            "from": float(params['price_from']),
+            "to": float(params['price_to'])
+        }}})
+
+    if params.has_key("brand_id"):
+        result["filter"]["and"].append({"term": {"related_vehicles.model.brand_id": params["brand_id"]}})
+
+    if params.has_key("model_id"):
+        result["filter"]["and"].append({"term": {"related_vehicles.model._id": params["model_id"]}})
+
+    if params.has_key("categories"):
+        result["filter"]["and"].append({"terms": {"categories.category_id":  params["categories"]}})
+
+    if params.has_key("vehicle_id"):
+        result["filter"]["and"].append({"term": {"related_vehicles._id": params["vehicle_id"]}})
+
+    if params.has_key("year"):
+        result["filter"]["and"].append({"term": {"related_vehicles.years.year": params["year"]}})
+
+    if params.has_key("vehicle_title"):
+        result["filter"]["and"].append({"query": {"match": {VEHICLE_TITLE: params["vehicle_title"]}}})
+
+    if params.has_key("vehicle_ids"):
+        result["filter"]["and"].append({"query": {"match": {"related_vehicles._id": params["vehicle_ids"]}}})
+
+    if params.has_key("q"):
+        result["filter"]["and"].append({"query": {
+            "multi_match":{
+                "query": params["q"],
+                "fields": [NAME, DESCRIPTION, TEASER]
+            }}}
+        )
+
+    if params.has_key("o"):
+        if params.has_key("ot"):
+            result["sort"] = {params["o"]: {"order": params["ot"]}}
+        else:
+            result["sort"] = {params["o"]: {"order": "asc"}}
+
+    if params.has_key("is_hide"):
+        result["filter"]["and"].append({"term": {"is_hide":  params["is_hide"]}})
+    else:
+        result["filter"]["and"].append({"term": {"is_hide":  False}})
+
+    if params.has_key("is_deleted"):
+        result["filter"]["and"].append({"term": {"is_deleted":  params["is_deleted"]}})
+    else:
+        result["filter"]["and"].append({"term": {"is_deleted":  False}})
+
+    return result
+
+
+def check_index_exist():
+    try:
+        es.send_request('HEAD', ['pycon'])
+    except InvalidJsonResponseError as exc:
+        if exc.response.status_code == 200:
+            return True
+        return False

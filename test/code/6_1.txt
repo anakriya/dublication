@@ -1,0 +1,18 @@
+import numpy
+def shellsort(a):
+  def new_increment(a):
+      i = int(len(a) / 2)
+      yield i
+      while i != 1:
+          if i == 2:
+              i = 1
+          else:
+              i = int(numpy.round(i/2.2))
+          yield i
+  for increment in new_increment(a):
+      for i in xrange(increment, len(a)):
+          for j in xrange(i, increment-1, -increment):
+              if a[j - increment] < a[j]:
+                  break
+              a[j],a[j - increment] = a[j - increment],a[j]
+  return a

@@ -1,0 +1,143 @@
+from bson.objectid import ObjectId
+from . import INDEX_NAME, TYPE_NAME
+import json
+from flask_mongoset import AttrDict
+from bson import json_util
+from datetime import datetime
+from wimoto.catalog.documents import Product, Vehicle, Model, Brand #, VehicleType
+
+#TODO: think about cache
+
+
+def get_db_iterator(**kwargs):
+    products = Product.query.find(kwargs)
+    for product in products:
+        id = str(product.id)
+        data = '{ "index" : { "_index" : "%s", "_type" : "%s", "_id" : "%s" } }\n' % (INDEX_NAME, TYPE_NAME, id)
+        product_dict = get_product(product)
+        data += json.dumps(product_dict, default=json_util.default)
+        data += " \n"
+        yield data
+
+def get_db(file):
+    products = Product.query.find()
+    for product in products:
+        id = str(product.id)
+        file.write('{ "index" : { "_index" : "%s", "_type" : "%s", "_id" : "%s" } }\n' % (INDEX_NAME, TYPE_NAME, id))
+        product_dict = get_product(product)
+        file.write('%s \n' % (json.dumps(product_dict)))
+
+
+
+
+def get_product(product):
+    result = {}
+    for k, v in product.iteritems():
+        if k == 'price':
+            result["price"] = str(product.get_price())
+            result["formated_price"] = str(product.get_formated_price('gross'))
+            continue
+        if k == "categories":
+            result["categories"] = []
+            for category_id in v:
+                result["categories"].append({"category_id": category_id})
+            continue
+        if k == "related_vehicles":
+            result["related_vehicles"] = get_vehicles(v)
+            continue
+        else:
+            result[k] = check_type(v)
+
+    return result
+
+def get_product_via_id(product_id):
+    product = Product.query.find_one({'_id': ObjectId(product_id)})
+    from pprint import pprint
+    pprint (product)
+    product_json = get_product(product)
+    return product_json
+
+
+model_cache = dict()
+def get_vehilcle(vehicle_id):
+    global  model_cache
+    result = {}
+    vehicle = dict(Vehicle.query.find_one(({'_id': vehicle_id})))
+
+    for k, v in vehicle.iteritems():
+        if k == "year":
+            result["years"] = []
+            for year in v:
+                result["years"].append({"year": year})
+            continue
+        if k == "model_id":
+            try:
+                result["model"] = model_cache[v]
+            except KeyError:
+                model_cache[v] = get_model(v)
+                result["model"] = model_cache[v]
+            continue
+        result[k] = check_type(v)
+    return result
+
+
+vehicle_cache = dict()
+def get_vehicles(vehilces_id_list):
+    global vehicle_cache
+    result = []
+    for vehicle_id in vehilces_id_list:
+        try:
+            result.append(vehicle_cache[vehicle_id])
+        except KeyError:
+            vehicle_cache[vehicle_id] = get_vehilcle(vehicle_id)
+            result.append(vehicle_cache[vehicle_id])
+    return result
+
+
+
+
+
+
+
+def check_type(v):
+    if type(v) is list:
+        result = []
+        for item in v:
+            result.append(check_type(item))
+    elif type(v) is dict:
+        result = {}
+        for key, value in v:
+            result.update({key: check_type(v)})
+    elif type(v) is AttrDict:
+        result = {}
+        for key, value in v.iteritems():
+            result.update({key: check_type(value)})
+    elif type(v) is ObjectId:
+        result = str(v)
+    elif type(v) is datetime:
+        result = str(v)
+    else:
+        result = v
+    return result
+
+
+vehicle_type_cash = dict()
+brand_type_cash = dict()
+def get_model(model_id):
+    global vehicle_type_cash, brand_type_cash
+    result = {}
+    model = dict(Model.query.find_one(({'_id': model_id})))
+
+    for k, v in model.iteritems():
+        result[k] = check_type(v)
+
+        if k == "brand_id":
+            try:
+                brand = brand_type_cash[v]
+            except KeyError:
+                brand_type_cash[v] = dict(Brand.query.find_one(({'_id': v})))
+                brand = brand_type_cash[v]
+
+            for k, v in brand.iteritems():
+                result[k] = v
+    return result

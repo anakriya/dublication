@@ -1,41 +1,30 @@
 import os
 from nose import with_setup
 from find_duplication import split_to_lexems, calculate_final_hash, hash_tokens
-#
-#def setup_func():
-#    "set up test fixtures"
-#    pass
-#
-#def teardown_func():
-#    "tear down test fixtures"
-#    pass
-#
-#
-#@with_setup(setup_func, teardown_func)
-def test_1():
-    "test of small part of code"
-    print  "test of small part of code"
-    f_path_first = os.path.join(os.getcwd(), 'test/code/1_1.txt')
 
 
-    first_f = open(f_path_first, 'r')
-    a = first_f.read()
+def calculate_result(file_path):
+    f_path = os.path.join(os.getcwd(), file_path)
+
+
+    f = open(f_path, 'r')
+    a = f.read()
     res_a = calculate_final_hash(a)
 
-    print len(set(res_a))
+    return set(res_a)
 
 
-    f_path_second = os.path.join(os.getcwd(), 'test/code/1_2.txt')
-    second_f = open(f_path_second, 'r')
-    b = second_f.read()
+def compare_2_files(f_path_first, f_path_second):
+    f_res = calculate_result(f_path_first)
+    s_res = calculate_result(f_path_second)
+    return 1.0*len(set(f_res)&set(s_res))/len(set(f_res))
 
-    res_b = calculate_final_hash(b)
 
-    print len(set(res_b))
-
-    print len(set(res_a)&set(res_b))
-    print 1.0*len(set(res_a)&set(res_b))/len(set(res_a))
-    #assert 1==1
+def test_1():
+    "test of small part of code"
+    print "test 1 - test of small part of code"
+    result = compare_2_files('test/code/1_1.txt', 'test/code/1_2.txt')
+    print result
 
 
 def test_2():
@@ -43,26 +32,8 @@ def test_2():
     test 2 - similar code
     """
     print "test 2 - similar code"
-    f_path_first = os.path.join(os.getcwd(), 'test/code/2_1.txt')
-
-
-    first_f = open(f_path_first, 'r')
-    a = first_f.read()
-    res_a = calculate_final_hash(a)
-
-    print len(set(res_a))
-
-
-    f_path_second = os.path.join(os.getcwd(), 'test/code/2_2.txt')
-    second_f = open(f_path_second, 'r')
-    b = second_f.read()
-
-    res_b = calculate_final_hash(b)
-
-    print len(set(res_b))
-
-    print len(set(res_a)&set(res_b))
-    print 1.0*len(set(res_a)&set(res_b))/len(set(res_a))
+    result = compare_2_files('test/code/2_1.txt', 'test/code/2_2.txt')
+    print result
 
 
 def test_3():
@@ -70,26 +41,8 @@ def test_3():
     test 3 - change position of 2 functions
     """
     print "test 3 - change position of 2 functions"
-    f_path_first = os.path.join(os.getcwd(), 'test/code/3_1.txt')
-
-
-    first_f = open(f_path_first, 'r')
-    a = first_f.read()
-    res_a = calculate_final_hash(a)
-
-    print len(set(res_a))
-
-
-    f_path_second = os.path.join(os.getcwd(), 'test/code/3_2.txt')
-    second_f = open(f_path_second, 'r')
-    b = second_f.read()
-
-    res_b = calculate_final_hash(b)
-
-    print len(set(res_b))
-
-    print len(set(res_a)&set(res_b))
-    print 1.0*len(set(res_a)&set(res_b))/len(set(res_a))
+    result = compare_2_files('test/code/3_1.txt', 'test/code/3_2.txt')
+    print result
 
 
 def test_4():
@@ -97,26 +50,8 @@ def test_4():
     test 4 - change name of one variable(7 times)
     """
     print "test 4 - change name of one variable(7 times)"
-    f_path_first = os.path.join(os.getcwd(), 'test/code/4_1.txt')
-
-
-    first_f = open(f_path_first, 'r')
-    a = first_f.read()
-    res_a = calculate_final_hash(a)
-
-    print len(set(res_a))
-
-
-    f_path_second = os.path.join(os.getcwd(), 'test/code/4_2.txt')
-    second_f = open(f_path_second, 'r')
-    b = second_f.read()
-
-    res_b = calculate_final_hash(b)
-
-    print len(set(res_b))
-
-    print len(set(res_a)&set(res_b))
-    print 1.0*len(set(res_a)&set(res_b))/len(set(res_a))
+    result = compare_2_files('test/code/4_1.txt', 'test/code/4_2.txt')
+    print result
 
 
 def test_5():
@@ -124,23 +59,150 @@ def test_5():
     test 5 - two different part of code
     """
     print " test 5 - two different part of code"
-    f_path_first = os.path.join(os.getcwd(), 'test/code/5_1.txt')
+    result = compare_2_files('test/code/5_1.txt', 'test/code/5_2.txt')
+    print result
 
 
-    first_f = open(f_path_first, 'r')
-    a = first_f.read()
-    res_a = calculate_final_hash(a)
+def test_6():
+    """
+    test 6
+    """
+    print " test 6 - "
+    result = compare_2_files('test/code/6_1.txt', 'test/code/6_2.txt')
+    print result
 
-    print len(set(res_a))
+
+def test_6():
+    """
+    test 6 - shell sort (change i -> c, j - >b) small code (18 lines)
+    """
+    print " test 6 - shell sort (change i -> c, j - >b) small code (18 lines)"
+    result = compare_2_files('test/code/6_1.txt', 'test/code/6_2.txt')
+    print result
 
 
-    f_path_second = os.path.join(os.getcwd(), 'test/code/5_2.txt')
-    second_f = open(f_path_second, 'r')
-    b = second_f.read()
+def test_7():
+    """
+    test 7 - change position of all functions and imports (143 lines)
+    """
+    print " test 7 - change position of all functions and imports (143 lines)"
+    result = compare_2_files('test/code/7_1.txt', 'test/code/7_2.txt')
+    print result
 
-    res_b = calculate_final_hash(b)
 
-    print len(set(res_b))
+def test_8():
+    """
+    test 8 - one code is longer than the other one
+    """
+    print " test 8 - "
+    result = compare_2_files('test/code/8_1.txt', 'test/code/8_2.txt')
+    print result
 
-    print len(set(res_a)&set(res_b))
-    print 1.0*len(set(res_a)&set(res_b))/len(set(res_a))
+
+def test_9():
+    """
+    test 9
+    """
+    print " test 9 - "
+    result = compare_2_files('test/code/9_1.txt', 'test/code/9_2.txt')
+    print result
+
+
+def test_10():
+    """
+    test 10
+    """
+    print " test 10 - "
+    result = compare_2_files('test/code/10_1.txt', 'test/code/10_2.txt')
+    print result
+
+
+def test_11():
+    """
+    test 11
+    """
+    print " test 11 - "
+    result = compare_2_files('test/code/11_1.txt', 'test/code/11_2.txt')
+    print result
+
+
+def test_12():
+    """
+    test 12
+    """
+    print " test 12 - "
+    result = compare_2_files('test/code/12_1.txt', 'test/code/12_2.txt')
+    print result
+
+
+def test_13():
+    """
+    test 13
+    """
+    print " test 13 - "
+    result = compare_2_files('test/code/13_1.txt', 'test/code/13_2.txt')
+    print result
+
+
+def test_14():
+    """
+    test 14
+    """
+    print " test 14 - "
+    result = compare_2_files('test/code/14_1.txt', 'test/code/14_2.txt')
+    print result
+
+
+def test_15():
+    """
+    test 15
+    """
+    print " test 15 - "
+    result = compare_2_files('test/code/15_1.txt', 'test/code/15_2.txt')
+    print result
+
+
+def test_16():
+    """
+    test 16
+    """
+    print " test 16 - "
+    result = compare_2_files('test/code/16_1.txt', 'test/code/16_2.txt')
+    print result
+
+
+def test_17():
+    """
+    test 17
+    """
+    print " test 17 - "
+    result = compare_2_files('test/code/17_1.txt', 'test/code/17_2.txt')
+    print result
+
+
+def test_18():
+    """
+    test 18
+    """
+    print " test 18 - "
+    result = compare_2_files('test/code/18_1.txt', 'test/code/18_2.txt')
+    print result
+
+
+def test_19():
+    """
+    test 19
+    """
+    print " test 19 - "
+    result = compare_2_files('test/code/19_1.txt', 'test/code/19_2.txt')
+    print result
+
+
+def test_20():
+    """
+    test 20
+    """
+    print " test 20 - "
+    result = compare_2_files('test/code/20_1.txt', 'test/code/20_2.txt')
+    print result
+
