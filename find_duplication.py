@@ -1,7 +1,17 @@
+import os
 import re
+import plyplus
 
+FILE_PATH = 'grammar/python2.7.txt'
 
 def split_to_lexems(source_code):
+    f_path = os.path.join(os.getcwd(), FILE_PATH)
+    f = open(f_path, 'r')
+    grammar = f.read()
+    g = plyplus.Grammar(grammar)
+    return g
+
+def _split_to_lexems(source_code):
     return re.split("[\s;]+", source_code)
 
 
