@@ -2,7 +2,7 @@ start: (NEWLINE|stmt)+;
 //module_header: string NEWLINE;
 
 //
-// STATEMENTS
+//     STATEMENTS
 //
 
   @stmt : simple_stmt | compound_stmt ;
@@ -55,10 +55,10 @@ start: (NEWLINE|stmt)+;
     ;
   import_all: STAR;
 
-  dotted_as_name : dotted_name (AS name)? ;
+  dotted_as_name : dotted_name (AS name)?  ;
 
-  import_as_names : import_as_name (COMMA import_as_name)* COMMA? ;
-  import_as_name : name (AS name)? ;
+  import_as_names : import_as_name (COMMA import_as_name)* COMMA?  ;
+  import_as_name : name (AS name)?  ;
 
   dotted_name : name (DOT name)* ;
 
@@ -69,10 +69,10 @@ start: (NEWLINE|stmt)+;
 
 // compound flow statements
   while_stmt : WHILE test COLON suite else_stmt? ;
-  with_stmt : WITH test (AS expr)? (COMMA test (AS expr)?)* COLON suite; // Too permissive
+  with_stmt : WITH test (AS expr)? (COMMA test (AS expr)?)* COLON suite;    // Too permissive
   if_stmt : IF test COLON suite (ELIF test COLON suite)* else_stmt? ;
   for_stmt : FOR exprlist IN testlist COLON suite else_stmt? ;
-  try_stmt : TRY COLON suite (except_stmt+ else_stmt? finally_stmt? | finally_stmt );
+  try_stmt : TRY COLON suite (except_stmt+ else_stmt?  finally_stmt? | finally_stmt );
   except_stmt : (EXCEPT (test ((AS|COMMA) test)?)? COLON suite);
   else_stmt : ELSE COLON suite;
   finally_stmt : FINALLY COLON suite;
@@ -99,24 +99,24 @@ start: (NEWLINE|stmt)+;
 
 // decorators
 
-// decorator : AT dotted_name NEWLINE // Strict, correct version
-// | AT dotted_name LPAR RPAR NEWLINE
-// | AT dotted_name LPAR arglist RPAR NEWLINE
-// ;
+//  decorator : AT dotted_name NEWLINE  // Strict, correct version
+//    | AT dotted_name LPAR RPAR NEWLINE
+//    | AT dotted_name LPAR arglist RPAR NEWLINE
+//    ;
 
 // Intentionally more flexible than python syntax
 decorator : AT (attrget|funccall|name) NEWLINE;
 decorators : decorator+ ;
 
 //
-// EXPRESSIONS
+//     EXPRESSIONS
 //
 
   ?or_test : and_test (OR and_test)* ;
   ?and_test : not_test (AND not_test)* ;
   @not_test : not_expr | comparison ;
   not_expr : NOT not_test;
-  ?comparison : expr (compare_symbol expr)* ;
+  ?comparison : expr (compare_symbol expr)*  ;
   ?expr : xor_expr (VBAR xor_expr)* ;
   ?xor_expr : and_expr (CIRCUMFLEX and_expr)* ;
   ?and_expr : shift_expr (AMPER shift_expr)* ;
@@ -157,7 +157,7 @@ decorators : decorator+ ;
   ?power : molecule (DOUBLESTAR factor)? ;
 
   @molecule : atom
-// | atom molecule_star
+//    | atom molecule_star
     | funccall
     | itemget
     | attrget
@@ -173,7 +173,7 @@ decorators : decorator+ ;
     | test
     | test? COLON (sliceop|test sliceop?|)
     ;
-  sliceop : COLON test? ;
+  sliceop : COLON test?  ;
 
   subscriptlist : subscript (COMMA subscript)* COMMA? ;
 
@@ -215,21 +215,21 @@ yield_expr : YIELD testlist? ;
 tuple : LPAR tuplemaker? RPAR ;
 @tuplemaker : test gen_for
             | test (COMMA | (COMMA test)+ COMMA? ) ;
-gen_for : FOR exprlist IN or_test gen_iter? ;
-gen_if : IF stunted_test gen_iter? ;
+gen_for : FOR exprlist IN or_test gen_iter?  ;
+gen_if : IF stunted_test gen_iter?  ;
 gen_iter : gen_for | gen_if ;
  
 list : LSQB listmaker? RSQB ;
 @listmaker : test (list_for | (COMMA test)+? COMMA?) ;
-list_for : FOR exprlist IN stunted_testlist list_iter? ;
-list_if : IF stunted_test list_iter? ;
+list_for : FOR exprlist IN stunted_testlist list_iter?  ;
+list_if : IF stunted_test list_iter?  ;
 list_iter : list_for | list_if ;
 stunted_testlist : stunted_test ((COMMA stunted_test)+ COMMA?)? ;
 
 dict : LBRACE dictmaker? RBRACE ;
 @dictmaker : dict_item (dict_for | (COMMA dict_item)+? COMMA?) ;
 dict_item: test COLON test;
-dict_for : FOR exprlist IN stunted_testlist list_iter? ;
+dict_for : FOR exprlist IN stunted_testlist list_iter?  ;
 
 set : LBRACE listmaker RBRACE;
 
@@ -283,22 +283,22 @@ term_symbol : STAR|SLASH|PERCENT|DOUBLESLASH ;
 shift_symbol: LEFTSHIFT|RIGHTSHIFT;
 add_symbol: PLUS|MINUS;
 
-name: NAME;
-number: DEC_NUMBER | HEX_NUMBER | OCT_NUMBER | FLOAT_NUMBER | IMAG_NUMBER;
-string: STRING|LONG_STRING;
+@name: NAME;
+@number: DEC_NUMBER | HEX_NUMBER | OCT_NUMBER | FLOAT_NUMBER | IMAG_NUMBER;
+@string: STRING|LONG_STRING;
 
 // Tokens!
-%fragment I: '(?i)'; // Case Insensitive
-%fragment S: '(?s)'; // Dot Matches Newline
+%fragment I: '(?i)';    // Case Insensitive
+%fragment S: '(?s)';    // Dot Matches Newline
 
 
 // number taken from tokenize module
 %fragment LONG_POSTFIX: I 'l?';
 %fragment EXP_POSTFIX: I 'e[-+]?\d+';
 
-DEC_NUMBER: I '[1-9]\d*' LONG_POSTFIX;
+DEC_NUMBER: I '[1-9]\d*'   LONG_POSTFIX;
 HEX_NUMBER: I '0x[\da-f]*' LONG_POSTFIX;
-OCT_NUMBER: I '0o?[0-7]*' LONG_POSTFIX;
+OCT_NUMBER: I '0o?[0-7]*'  LONG_POSTFIX;
 FLOAT_NUMBER: I '(\d+\.\d*|\.\d+)(' EXP_POSTFIX ')?'
                 '|\d+' EXP_POSTFIX;
 IMAG_NUMBER: I '\d+j|(' FLOAT_NUMBER ')j';
@@ -368,7 +368,7 @@ RBRACE: '}';
 LSQB: '\[';
 RSQB: ']';
 
-NEWLINE: '(\r?\n[\t ]*)+' // Don't count on the + to prevent multiple NEWLINE tokens. It's just an optimization
+NEWLINE: '(\r?\n[\t ]*)+'    // Don't count on the + to prevent multiple NEWLINE tokens. It's just an optimization
     (%newline)
     ;
 
@@ -376,7 +376,7 @@ WS: '[\t \f]+' (%ignore);
 LINE_CONT: '\\[\t \f]*\r?\n' (%ignore) (%newline);
 COMMENT: '\#[^\n]*'(%ignore);
 
-NAME: I '[a-z_]\w*(?!r?"|r?\')' // Match names and not strings (r"...")
+NAME: I '[a-z_]\w*(?!r?"|r?\')'  // Match names and not strings (r"...")
     (%unless
         PRINT: 'print';
         IMPORT: 'import';
