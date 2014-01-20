@@ -18,6 +18,7 @@ def split_to_lexems(source_code):
     result = [i.head for i in t.select('*') if isinstance(i, t.__class__) and i.head != 'name']
     return result
 
+
 def _split_to_lexems(source_code):
     return re.split("[\s;]+", source_code)
 
