@@ -4,11 +4,16 @@ import plyplus
 
 FILE_PATH = 'grammar/python2.7.txt'
 
-def split_to_lexems(source_code):
-    #source_code
+def split_to_lexems():
+    file_path = "test/code/6_1.txt"
+
+    f_path = os.path.join(os.getcwd(), file_path)
 
 
-    #grammar
+    f = open(f_path, 'r')
+    source_code = f.read()
+
+
     f_path = os.path.join(os.getcwd(), FILE_PATH)
     f = open(f_path, 'r')
     grammar = f.read()
@@ -43,5 +48,3 @@ def calculate_final_hash(soucre_code):
     res = hash_tokens(res, 3)
     res = winnow(3, res)
     return res
-
-
