@@ -4,14 +4,14 @@ import plyplus
 
 FILE_PATH = 'grammar/python2.7.txt'
 
-def split_to_lexems():
-    file_path = "test/code/6_1.txt"
-
-    f_path = os.path.join(os.getcwd(), file_path)
-
-
-    f = open(f_path, 'r')
-    source_code = f.read()
+def split_to_lexems(source_code):
+    # file_path = "test/code/6_1.txt"
+    #
+    # f_path = os.path.join(os.getcwd(), file_path)
+    #
+    #
+    # f = open(f_path, 'r')
+    # source_code = f.read()
 
 
     f_path = os.path.join(os.getcwd(), FILE_PATH)
