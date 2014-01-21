@@ -1,0 +1,30 @@
+def adj(g):
+    vertices = g.keys()
+    dist = {}
+    for i in vertices:
+        dist[i] = {}
+        for j in vertices:
+            try:
+                dist[i][j] = g[i][j]
+            except KeyError:
+                if i == j:
+                    dist[i][j] = 0
+                else:
+                    dist[i][j] = float('inf')
+    return dist
+
+
+def fw(g):
+
+    vertices = g.keys()
+    d = dict(g)
+    for k in vertices:
+        for i in vertices:
+            for j in vertices:
+                d[i][j] = min(d[i][j], d[i][k] + d[k][j])
+    return d
+
+
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()

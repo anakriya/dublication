@@ -1,0 +1,16 @@
+def two_pass_variance(data):
+    num = 0
+    sum1 = 0
+    sum2 = 0
+
+    for item in data:
+        n    = n + 1
+        sum1 = sum1 + item
+
+    mean = sum1/n
+
+    for item in data:
+        sum2 = sum2 + (item - mean)*(item - mean)
+
+    variance = sum2/(n - 1)
+    return variance
