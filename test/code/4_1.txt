@@ -32,7 +32,6 @@ __all__ = ['CustomCartResource', 'CheckoutCustomerResource',
            'CustomCartTotalsResource']
 
 
-@api_resource(checkout, 'carts', {'id': int})
 class CustomCartResource(CartResource):
 
     def __sum(self, key, objects):

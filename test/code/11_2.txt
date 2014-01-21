@@ -1,4 +1,4 @@
-nimport sys
+import sys
 import re
 import math
 
@@ -67,8 +67,7 @@ def get_tokens(expression):
     """ a parser. myvar2 (previous token) helps to decide if - is
     unary or binary """
     opening_bars = expression.count('|') / 2
-    tokens = [part for part in re.split(r'([^\\w\\d.])', expression)\\
-              if len(part.strip()) > 0]
+    tokens = [part for part in re.split(r'([^\\w\\d.])', expression) if len(part.strip()) > 0]
     myvar2 = True
     for token in tokens:
         if token == '-' and myvar2:
